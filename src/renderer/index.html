@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; media-src file: 'self'; connect-src 'none'; object-src 'none'">
+  <title>TikTok Growth Assistant</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="../../build/icon.png" alt="">
+      <span data-i18n="appName"></span>
+    </div>
+    <nav id="nav">
+      <button data-view="dashboard" class="active"><span class="ico">▦</span><span data-i18n="nav_dashboard"></span></button>
+      <button data-view="videos"><span class="ico">▶</span><span data-i18n="nav_videos"></span></button>
+      <button data-view="insights"><span class="ico">◔</span><span data-i18n="nav_insights"></span></button>
+      <button data-view="scheduler"><span class="ico">⏱</span><span data-i18n="nav_scheduler"></span></button>
+      <button data-view="settings"><span class="ico">⚙</span><span data-i18n="nav_settings"></span></button>
+    </nav>
+    <div class="side-foot">
+      <div class="lang-switch" id="langSwitch">
+        <button data-lang="th">ไทย</button><button data-lang="en">EN</button>
+      </div>
+      <div class="muted small" id="version"></div>
+    </div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div id="accountChip" class="account-chip"></div>
+      <div class="spacer"></div>
+      <span class="muted small" id="lastSync"></span>
+      <button id="syncBtn" class="btn"><span data-i18n="syncNow"></span></button>
+    </header>
+
+    <!-- DASHBOARD -->
+    <section id="view-dashboard" class="view active">
+      <div id="dashEmpty" class="empty hidden">
+        <p data-i18n="notLoggedIn"></p>
+        <button class="btn primary" data-goto="settings" data-i18n="goSettings"></button>
+      </div>
+      <div id="dashBody">
+        <div class="kpis" id="kpis"></div>
+        <div class="grid-2">
+          <div class="card"><h3 data-i18n="followerTrend"></h3><div class="chart-box"><canvas id="chFollowers"></canvas></div>
+            <p class="muted small hidden" id="snapHint" data-i18n="needMoreSnapshots"></p></div>
+          <div class="card"><h3 data-i18n="dailyChange"></h3><div class="chart-box"><canvas id="chDelta"></canvas></div></div>
+        </div>
+        <div class="card"><h3 data-i18n="topVideos"></h3><div id="topList" class="video-cards"></div></div>
+      </div>
+    </section>
+
+    <!-- VIDEOS -->
+    <section id="view-videos" class="view">
+      <div class="toolbar">
+        <input id="videoSearch" type="search" data-i18n-ph="search">
+        <div class="spacer"></div>
+        <button class="btn" id="expVideos" data-i18n="exportVideos"></button>
+        <button class="btn" id="expFollowers" data-i18n="exportFollowers"></button>
+      </div>
+      <div class="card table-card">
+        <table class="data" id="videoTable">
+          <thead><tr>
+            <th></th>
+            <th data-sort="title" data-i18n="col_title"></th>
+            <th data-sort="create_time" data-i18n="col_date"></th>
+            <th data-sort="duration" class="num" data-i18n="col_duration"></th>
+            <th data-sort="view_count" class="num" data-i18n="col_views"></th>
+            <th data-sort="like_count" class="num" data-i18n="col_likes"></th>
+            <th data-sort="comment_count" class="num" data-i18n="col_comments"></th>
+            <th data-sort="share_count" class="num" data-i18n="col_shares"></th>
+            <th data-sort="engagement" class="num" data-i18n="col_er"></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty-row hidden" id="videoEmpty" data-i18n="noVideos"></p>
+      </div>
+    </section>
+
+    <!-- INSIGHTS -->
+    <section id="view-insights" class="view">
+      <div id="sampleWarn" class="alert hidden"></div>
+      <div class="grid-2">
+        <div class="card"><h3 data-i18n="bestTimes"></h3><ol id="bestList" class="best-list"></ol></div>
+        <div class="card"><h3 data-i18n="viewsByDay"></h3><div class="chart-box"><canvas id="chByDay"></canvas></div></div>
+      </div>
+      <div class="card"><h3 data-i18n="heatmap"></h3><div id="heatmap" class="heatmap"></div></div>
+      <div class="grid-2">
+        <div class="card"><h3 data-i18n="viewsByHour"></h3><div class="chart-box"><canvas id="chByHour"></canvas></div></div>
+        <div class="card"><h3 data-i18n="durationPerf"></h3><div class="chart-box"><canvas id="chDuration"></canvas></div></div>
+      </div>
+      <div class="grid-2">
+        <div class="card"><h3 data-i18n="hashtagPerf"></h3>
+          <table class="data compact" id="tagTable"><thead><tr>
+            <th data-i18n="tag"></th><th class="num" data-i18n="uses"></th>
+            <th class="num" data-i18n="medianViews"></th><th class="num" data-i18n="lift"></th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+        <div class="card"><h3 data-i18n="topEngagement"></h3><div id="erList" class="rank-list"></div></div>
+      </div>
+    </section>
+
+    <!-- SCHEDULER -->
+    <section id="view-scheduler" class="view">
+      <div class="grid-sched">
+        <div class="card">
+          <h3 data-i18n="newPost"></h3>
+          <div class="field">
+            <div class="drop" id="dropZone">
+              <button class="btn" id="pickVideo" data-i18n="pickVideo"></button>
+              <span id="fileName" class="muted" data-i18n="noFile"></span>
+            </div>
+            <video id="preview" class="preview hidden" muted controls></video>
+          </div>
+          <div class="field">
+            <label data-i18n="caption"></label>
+            <textarea id="caption" rows="4" maxlength="2200"></textarea>
+            <div class="muted small right"><span id="capCount">0</span>/2200</div>
+          </div>
+          <div class="field">
+            <label data-i18n="mode"></label>
+            <label class="radio"><input type="radio" name="mode" value="direct" checked> <span data-i18n="mode_direct"></span></label>
+            <label class="radio"><input type="radio" name="mode" value="inbox"> <span data-i18n="mode_inbox"></span></label>
+          </div>
+          <div id="directOpts">
+            <div class="field creator" id="creatorBox"></div>
+            <div class="field">
+              <label data-i18n="whoCanView"></label>
+              <select id="privacy"></select>
+              <div class="muted small" data-i18n="unauditedNote"></div>
+            </div>
+            <div class="field toggles">
+              <label class="check"><input type="checkbox" id="allowComment"> <span data-i18n="allowComment"></span></label>
+              <label class="check"><input type="checkbox" id="allowDuet"> <span data-i18n="allowDuet"></span></label>
+              <label class="check"><input type="checkbox" id="allowStitch"> <span data-i18n="allowStitch"></span></label>
+            </div>
+            <div class="field">
+              <label class="check"><input type="checkbox" id="disclose"> <span data-i18n="disclose"></span></label>
+              <div id="discloseOpts" class="sub hidden">
+                <label class="check"><input type="checkbox" id="brandOrganic"> <span data-i18n="yourBrand"></span></label>
+                <label class="check"><input type="checkbox" id="brandContent"> <span data-i18n="brandedContent"></span></label>
+              </div>
+            </div>
+          </div>
+          <div class="field">
+            <label data-i18n="scheduleAt"></label>
+            <div class="row">
+              <input type="datetime-local" id="schedAt">
+              <button class="btn" id="btnNow" data-i18n="postNow"></button>
+              <button class="btn" id="btnSuggest" data-i18n="useSuggested"></button>
+            </div>
+            <div class="muted small" id="suggestHint"></div>
+          </div>
+          <p class="muted small" id="consentLine"></p>
+          <button class="btn primary wide" id="addPost" data-i18n="addToQueue"></button>
+        </div>
+        <div class="card">
+          <h3 data-i18n="queue"></h3>
+          <p class="muted small" data-i18n="keepOpen"></p>
+          <div id="queue" class="queue"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="view-settings" class="view">
+      <div class="grid-2">
+        <div class="card">
+          <h3 data-i18n="account"></h3>
+          <div id="accountBox" class="account-box"></div>
+          <div class="row">
+            <button class="btn primary" id="btnLogin" data-i18n="connect"></button>
+            <button class="btn danger hidden" id="btnLogout" data-i18n="disconnect"></button>
+          </div>
+          <p class="muted small hidden" id="loginWait" data-i18n="waitingBrowser"></p>
+
+          <h3 class="mt" data-i18n="preferences"></h3>
+          <label class="check"><input type="checkbox" id="setAutoSync"> <span data-i18n="autoSync"></span></label>
+          <label class="check"><input type="checkbox" id="setTray"> <span data-i18n="closeToTray"></span></label>
+        </div>
+        <div class="card">
+          <h3 data-i18n="tiktokApp"></h3>
+          <div class="field"><label data-i18n="clientKey"></label><input id="setKey" autocomplete="off" spellcheck="false"></div>
+          <div class="field"><label data-i18n="clientSecret"></label><input id="setSecret" type="password" autocomplete="off"></div>
+          <div class="field"><label data-i18n="port"></label><input id="setPort" type="number" min="1024" max="65535"></div>
+          <div class="field"><label data-i18n="redirectUri"></label>
+            <div class="row"><code id="redirUri" class="code"></code><button class="btn" id="copyRedir" data-i18n="copy"></button></div>
+          </div>
+          <div class="field"><label data-i18n="scopes"></label><div id="scopeList" class="chips"></div></div>
+          <button class="btn primary" id="saveSettings" data-i18n="save"></button>
+        </div>
+      </div>
+      <div class="card">
+        <h3 data-i18n="setupGuide"></h3>
+        <ol class="steps">
+          <li data-i18n="setup1"></li><li data-i18n="setup2"></li><li data-i18n="setup3"></li>
+          <li data-i18n="setup4"></li><li data-i18n="setup5"></li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="../../node_modules/chart.js/dist/chart.umd.min.js"></script>
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
