@@ -132,7 +132,7 @@ function mockFetch(routes) {
       assert.ok(/^bytes \d+-\d+\/\d+$/.test(o.headers['Content-Range']));
       return { status: 201, json: {} };
     }],
-    ['/v2/post/publish/status/fetch/', async () => ({ json: { data: { status: 'PUBLISH_COMPLETE' }, error: { code: 'ok' } } })]
+    ['/v2/post/publish/status/fetch/', async () => ({ json: { data: { status: 'PUBLISH_COMPLETE', publicaly_available_post_id: [7300123] }, error: { code: 'ok' } } })]
   ];
   const fetchImpl = mockFetch(routes);
   const client = new TikTokClient({
@@ -163,9 +163,11 @@ function mockFetch(routes) {
     fs.writeFileSync(vid, Buffer.alloc(2 * MB, 1));
     db.run(`INSERT INTO scheduled_posts(file_path, title, mode, privacy_level, scheduled_at, status, created_at, updated_at)
             VALUES(?,?,?,?,?, 'pending', ?, ?)`, [vid, 'hello #test', 'direct', 'SELF_ONLY', Date.now() - 1000, Date.now(), Date.now()]);
-    const sch = new Scheduler({ db, client });
+    let published = null;
+    const sch = new Scheduler({ db, client, onPublished: (p) => { published = p; } });
     await sch.tick();
     sch.stop();
+    assert.deepStrictEqual(published && published.postIds, ['7300123']);
     const p = db.get('SELECT * FROM scheduled_posts ORDER BY id DESC LIMIT 1');
     assert.strictEqual(p.status, 'published', p.error);
     assert.strictEqual(p.publish_id, 'p1');

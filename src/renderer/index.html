@@ -15,8 +15,11 @@
     </div>
     <nav id="nav">
       <button data-view="dashboard" class="active"><span class="ico">▦</span><span data-i18n="nav_dashboard"></span></button>
+      <button data-view="velocity"><span class="ico">⚡</span><span data-i18n="nav_velocity"></span><span class="nav-badge hidden" id="velBadge"></span></button>
       <button data-view="videos"><span class="ico">▶</span><span data-i18n="nav_videos"></span></button>
       <button data-view="insights"><span class="ico">◔</span><span data-i18n="nav_insights"></span></button>
+      <button data-view="calendar"><span class="ico">▤</span><span data-i18n="nav_calendar"></span></button>
+      <button data-view="ideas"><span class="ico">✎</span><span data-i18n="nav_ideas"></span></button>
       <button data-view="scheduler"><span class="ico">⏱</span><span data-i18n="nav_scheduler"></span></button>
       <button data-view="settings"><span class="ico">⚙</span><span data-i18n="nav_settings"></span></button>
     </nav>
@@ -43,6 +46,7 @@
         <button class="btn primary" data-goto="settings" data-i18n="goSettings"></button>
       </div>
       <div id="dashBody">
+        <div id="trendStrip" class="trend-strip hidden"></div>
         <div class="kpis" id="kpis"></div>
         <div class="grid-2">
           <div class="card"><h3 data-i18n="followerTrend"></h3><div class="chart-box"><canvas id="chFollowers"></canvas></div>
@@ -53,10 +57,67 @@
       </div>
     </section>
 
+    <!-- VELOCITY -->
+    <section id="view-velocity" class="view">
+      <div class="card">
+        <div class="row wrap"><h3 class="grow" data-i18n="velTitle"></h3><span id="velMeta" class="muted small"></span></div>
+        <p class="muted small" id="velExplain"></p>
+      </div>
+      <div id="velEmpty" class="empty hidden"><p data-i18n="velEmpty"></p></div>
+      <div class="grid-vel">
+        <div id="velList" class="vel-list"></div>
+        <div class="card sticky" id="velDetail">
+          <h3 id="velDetailTitle"></h3>
+          <div class="chart-box"><canvas id="chVelocity"></canvas></div>
+          <div id="velAdvice" class="advice"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CALENDAR -->
+    <section id="view-calendar" class="view">
+      <div class="grid-cal-top">
+        <div class="card">
+          <h3 data-i18n="goalTitle"></h3>
+          <div id="goalBox" class="goal-box"></div>
+          <div class="chart-box short"><canvas id="chGoal"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="row">
+            <button class="btn" id="calPrev">‹</button>
+            <h3 id="calLabel" class="cal-label"></h3>
+            <button class="btn" id="calNext">›</button>
+            <div class="spacer"></div>
+            <button class="btn" id="calToday" data-i18n="today"></button>
+          </div>
+          <div class="cal-legend small muted">
+            <span><i class="dot posted"></i><span data-i18n="legendPosted"></span></span>
+            <span><i class="dot scheduled"></i><span data-i18n="legendScheduled"></span></span>
+            <span><i class="dot idea"></i><span data-i18n="legendIdea"></span></span>
+            <span data-i18n="calHint"></span>
+          </div>
+          <div id="calGrid" class="cal-grid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- IDEAS -->
+    <section id="view-ideas" class="view">
+      <div class="toolbar">
+        <button class="btn primary" id="newIdea" data-i18n="newIdea"></button>
+        <select id="ideaStatusFilter" class="auto"></select>
+        <select id="ideaTagFilter" class="auto"></select>
+        <input id="ideaSearch" type="search" data-i18n-ph="search">
+      </div>
+      <div id="ideaBoard" class="idea-board"></div>
+    </section>
+
     <!-- VIDEOS -->
     <section id="view-videos" class="view">
       <div class="toolbar">
         <input id="videoSearch" type="search" data-i18n-ph="search">
+        <select id="videoTagFilter" class="auto"></select>
+        <button class="btn" id="manageTags" data-i18n="manageTags"></button>
         <div class="spacer"></div>
         <button class="btn" id="expVideos" data-i18n="exportVideos"></button>
         <button class="btn" id="expFollowers" data-i18n="exportFollowers"></button>
@@ -73,6 +134,7 @@
             <th data-sort="comment_count" class="num" data-i18n="col_comments"></th>
             <th data-sort="share_count" class="num" data-i18n="col_shares"></th>
             <th data-sort="engagement" class="num" data-i18n="col_er"></th>
+            <th data-i18n="col_tags"></th>
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -101,6 +163,18 @@
         </div>
         <div class="card"><h3 data-i18n="topEngagement"></h3><div id="erList" class="rank-list"></div></div>
       </div>
+      <div class="card">
+        <h3 data-i18n="attrTitle"></h3>
+        <p class="muted small" id="attrNote"></p>
+        <table class="data compact" id="attrTable"><thead><tr>
+          <th></th><th data-i18n="col_title"></th><th class="num" data-i18n="viewsGained"></th>
+          <th class="num" data-i18n="followersGained"></th><th class="num" data-i18n="per1k"></th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="grid-2">
+        <div class="card"><h3 data-i18n="pillarPerf"></h3><div id="pillarPerf"></div></div>
+        <div class="card"><h3 data-i18n="formatPerf"></h3><div id="formatPerf"></div></div>
+      </div>
     </section>
 
     <!-- SCHEDULER -->
@@ -108,6 +182,7 @@
       <div class="grid-sched">
         <div class="card">
           <h3 data-i18n="newPost"></h3>
+          <div id="ideaBanner" class="idea-banner hidden"></div>
           <div class="field">
             <div class="drop" id="dropZone">
               <button class="btn" id="pickVideo" data-i18n="pickVideo"></button>
@@ -119,6 +194,12 @@
             <label data-i18n="caption"></label>
             <textarea id="caption" rows="4" maxlength="2200"></textarea>
             <div class="muted small right"><span id="capCount">0</span>/2200</div>
+            <div class="small muted" data-i18n="suggestedTags"></div>
+            <div id="tagSuggest" class="chips clickable"></div>
+          </div>
+          <div class="field">
+            <label data-i18n="postTags"></label>
+            <div id="postTags" class="tag-pick"></div>
           </div>
           <div class="field">
             <label data-i18n="mode"></label>
@@ -180,6 +261,9 @@
           <h3 class="mt" data-i18n="preferences"></h3>
           <label class="check"><input type="checkbox" id="setAutoSync"> <span data-i18n="autoSync"></span></label>
           <label class="check"><input type="checkbox" id="setTray"> <span data-i18n="closeToTray"></span></label>
+          <div class="field mt-s"><label data-i18n="postsPerWeek"></label>
+            <div class="row"><input type="number" id="setGoal" min="1" max="50" class="w-num"><button class="btn" id="saveGoal" data-i18n="save"></button></div>
+          </div>
         </div>
         <div class="card">
           <h3 data-i18n="tiktokApp"></h3>
@@ -203,10 +287,12 @@
     </section>
   </main>
 
+  <div id="modal" class="modal hidden"><div class="modal-box" id="modalBox"></div></div>
   <div id="toast" class="toast"></div>
 
   <script src="../../node_modules/chart.js/dist/chart.umd.min.js"></script>
   <script src="i18n.js"></script>
   <script src="app.js"></script>
+  <script src="growth-ui.js"></script>
 </body>
 </html>

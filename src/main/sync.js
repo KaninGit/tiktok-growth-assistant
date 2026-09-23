@@ -1,7 +1,11 @@
 'use strict';
 
-/** Pull account + video stats from TikTok and store snapshots locally. */
-async function syncAll(client, db) {
+/**
+ * Pull account + video stats from TikTok and store snapshots locally.
+ * kind 'full' pages through all videos; 'recent' only fetches the newest page
+ * (used for frequent early-velocity tracking of new videos).
+ */
+async function syncAll(client, db, { kind = 'full', limit } = {}) {
   const now = Date.now();
   const user = await client.getUserInfo();
   const openId = user.open_id;
@@ -11,7 +15,7 @@ async function syncAll(client, db) {
           VALUES(?,?,?,?,?,?)`,
   [openId, now, user.follower_count ?? null, user.following_count ?? null, user.likes_count ?? null, user.video_count ?? null]);
 
-  const videos = await client.listAllVideos();
+  const videos = await client.listAllVideos(limit || (kind === 'recent' ? 20 : undefined));
   db.transaction(() => {
     for (const v of videos) {
       db.db.run(`INSERT INTO videos(id, open_id, title, description, create_time, duration, cover_image_url, share_url,
@@ -31,8 +35,10 @@ async function syncAll(client, db) {
       [v.id, now, v.view_count || 0, v.like_count || 0, v.comment_count || 0, v.share_count || 0]);
     }
   });
-  db.setSetting('last_sync', now);
-  return { user, videoCount: videos.length, at: now };
+  db.run('INSERT OR REPLACE INTO sync_runs(taken_at, kind) VALUES(?, ?)', [now, kind]);
+  db.setSetting(kind === 'full' ? 'last_sync' : 'last_recent_sync', now);
+  if (kind === 'recent') db.setSetting('last_sync', now);
+  return { user, videoCount: videos.length, at: now, kind };
 }
 
 module.exports = { syncAll };

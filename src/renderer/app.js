@@ -14,7 +14,11 @@ const state = {
   analytics: null,
   charts: {},
   file: null,
-  creator: null
+  creator: null,
+  tags: [],
+  videoTagFilter: '',
+  postTagIds: [],
+  ideaId: null
 };
 
 // ---------------- utils ----------------
@@ -99,7 +103,7 @@ function go(view) {
 }
 
 function refreshView() {
-  const map = { dashboard: renderDashboard, videos: loadVideos, insights: renderInsights, scheduler: renderScheduler, settings: renderSettings };
+  const map = { dashboard: renderDashboard, videos: loadVideos, insights: renderInsights, scheduler: renderScheduler, settings: renderSettings, ...(window.GROWTH_VIEWS || {}) };
   (map[state.view] || (() => {}))().catch((e) => console.error(e));
 }
 
@@ -118,6 +122,7 @@ function renderLastSync() {
 async function loadSettings() {
   state.settings = await call(api.getSettings);
   state.lang = state.settings.lang;
+  state.tags = await call(api.tags);
   $('#version').textContent = `v${state.settings.version}`;
   renderAccountChip();
   applyI18n();
@@ -142,8 +147,18 @@ async function renderDashboard() {
     kpi(t('likes'), fmt(a.likes_count)),
     kpi(t('videos'), fmt(a.video_count)),
     kpi(t('medianViews'), fmt(s.medianViews)),
-    kpi(t('engagementRate'), pct(s.engagementRate))
+    kpi(t('engagementRate'), pct(s.engagementRate)),
+    d.goal ? `<div class="kpi clickable" data-goto="calendar"><div class="label">${esc(t('goalTitle'))}</div>
+      <div class="value">${d.goal.postedThisWeek}<span class="muted small"> / ${d.goal.goal}</span></div>
+      <div class="delta ${d.goal.streak ? 'pos' : 'muted'}">${esc(d.goal.streak ? t('streak', { n: d.goal.streak }) : t('goalRemaining', { n: d.goal.remaining }))}</div></div>` : ''
   ].join('');
+  $$('#kpis [data-goto]').forEach((el) => el.addEventListener('click', () => go(el.dataset.goto)));
+  const strip = $('#trendStrip');
+  strip.classList.toggle('hidden', !d.trending.length);
+  strip.innerHTML = d.trending.length ? `<b>🔥 ${esc(t('trendingNow'))}</b>` + d.trending.map((v) =>
+    `<button class="trend-chip ${esc(v.level)}" data-vel="${esc(v.id)}"><span class="t">${esc(v.title || '—')}</span>
+     <span class="r">${v.ratio.toFixed(1)}×</span></button>`).join('') : '';
+  $$('#trendStrip [data-vel]').forEach((b) => b.addEventListener('click', () => { state.velSelected = b.dataset.vel; go('velocity'); }));
 
   const g = d.growth;
   $('#snapHint').classList.toggle('hidden', g.length >= 2);
@@ -175,13 +190,29 @@ function bindOpen(root) {
 // ---------------- videos ----------------
 async function loadVideos() {
   state.videos = await call(api.videos);
+  renderTagFilter();
   renderVideoTable();
+}
+
+function tagById(id) { return state.tags.find((x) => x.id === id); }
+function tagChips(ids = []) {
+  return ids.map(tagById).filter(Boolean)
+    .map((x) => `<span class="tag ${esc(x.kind)}" ${x.color ? `style="--tc:${esc(x.color)}"` : ''}>${esc(x.name)}</span>`).join('');
+}
+function renderTagFilter() {
+  const sel = $('#videoTagFilter');
+  const opt = (kind) => state.tags.filter((x) => x.kind === kind).map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join('');
+  sel.innerHTML = `<option value="">${esc(t('allTags'))}</option><option value="-1">${esc(t('untagged'))}</option>
+    <optgroup label="${esc(t('pillars'))}">${opt('pillar')}</optgroup><optgroup label="${esc(t('formats'))}">${opt('format')}</optgroup>`;
+  sel.value = state.videoTagFilter;
 }
 function renderVideoTable() {
   const q = $('#videoSearch').value.trim().toLowerCase();
   const { key, dir } = state.sort;
+  const tf = Number(state.videoTagFilter);
   const rows = state.videos
     .filter((v) => !q || `${v.title} ${v.description}`.toLowerCase().includes(q))
+    .filter((v) => !tf || (tf === -1 ? !v.tag_ids.length : v.tag_ids.includes(tf)))
     .sort((a, b) => {
       const x = a[key]; const y = b[key];
       return (typeof x === 'string' ? x.localeCompare(y) : (x || 0) - (y || 0)) * dir;
@@ -197,7 +228,12 @@ function renderVideoTable() {
     <td class="num">${fmtDur(v.duration)}</td>
     <td class="num">${fmt(v.view_count)}</td><td class="num">${fmt(v.like_count)}</td>
     <td class="num">${fmt(v.comment_count)}</td><td class="num">${fmt(v.share_count)}</td>
-    <td class="num">${pct(v.engagement)}</td></tr>`).join('');
+    <td class="num">${pct(v.engagement)}</td>
+    <td class="tags-cell"><div class="tag-row">${tagChips(v.tag_ids)}<button class="btn tiny ghost" data-tag-video="${esc(v.id)}">＋</button></div></td></tr>`).join('');
+  $$('#videoTable [data-tag-video]').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openVideoTagEditor(b.dataset.tagVideo);
+  }));
   $('#videoEmpty').classList.toggle('hidden', state.videos.length > 0);
   bindOpen($('#videoTable tbody'));
 }
@@ -258,6 +294,7 @@ async function renderInsights() {
     <img src="${esc(v.cover_image_url)}" alt=""><div class="t">${esc(v.title || '—')}</div>
     <b>${pct(v.engagement)}</b><span class="muted small">${fmt(v.view_count)}</span></div>`).join('');
   bindOpen($('#erList'));
+  if (window.renderGrowthInsights) window.renderGrowthInsights(a);
 }
 
 // ---------------- scheduler ----------------
@@ -275,6 +312,9 @@ async function renderScheduler() {
   $('#btnSuggest').disabled = !sug;
   if (!$('#schedAt').value) $('#schedAt').value = toLocalInput(sug || new Date(Date.now() + 15 * 60 * 1000));
   updateModeUi();
+  renderPostTags();
+  renderIdeaBanner();
+  loadHashtagSuggestions();
   await renderQueue();
   if (state.settings.loggedIn && currentMode() === 'direct') loadCreator();
 }
@@ -350,7 +390,9 @@ async function addPost() {
     durationSec: state.file.duration || null,
     title: $('#caption').value,
     mode,
-    scheduledAt: Number.isFinite(at) ? Math.max(at, Date.now()) : Date.now()
+    scheduledAt: Number.isFinite(at) ? Math.max(at, Date.now()) : Date.now(),
+    tagIds: state.postTagIds,
+    ideaId: state.ideaId
   };
   if (mode === 'direct') {
     if (!$('#privacy').value) return toast(t('whoCanView'), true);
@@ -368,6 +410,10 @@ async function addPost() {
   setFile(null);
   $('#caption').value = '';
   $('#capCount').textContent = '0';
+  state.postTagIds = [];
+  state.ideaId = null;
+  renderPostTags();
+  renderIdeaBanner();
   renderQueue();
 }
 
@@ -390,6 +436,60 @@ async function renderQueue() {
   }).join('') || `<p class="muted">${esc(t('noQueue'))}</p>`;
 }
 
+
+function renderPostTags() {
+  const box = $('#postTags');
+  if (!state.tags.length) { box.innerHTML = `<span class="muted small">${esc(t('noTagsYet'))}</span>`; return; }
+  box.innerHTML = ['pillar', 'format'].map((kind) => {
+    const list = state.tags.filter((x) => x.kind === kind);
+    if (!list.length) return '';
+    return `<div class="tag-group"><span class="muted small">${esc(t(kind))}</span>${list.map((x) =>
+      `<button type="button" class="tag pick ${esc(kind)} ${state.postTagIds.includes(x.id) ? 'on' : ''}" data-tid="${x.id}" ${x.color ? `style="--tc:${esc(x.color)}"` : ''}>${esc(x.name)}</button>`).join('')}</div>`;
+  }).join('');
+  $$('#postTags [data-tid]').forEach((b) => b.addEventListener('click', () => {
+    const id = Number(b.dataset.tid);
+    state.postTagIds = state.postTagIds.includes(id) ? state.postTagIds.filter((x) => x !== id) : [...state.postTagIds, id];
+    renderPostTags();
+    loadHashtagSuggestions();
+  }));
+}
+
+async function loadHashtagSuggestions() {
+  const box = $('#tagSuggest');
+  if (!state.settings.loggedIn) { box.innerHTML = ''; return; }
+  const pillar = state.postTagIds.map(tagById).find((x) => x && x.kind === 'pillar');
+  const r = await api.suggestHashtags(pillar ? pillar.id : null);
+  const list = r.ok ? r.data : [];
+  const cap = $('#caption').value.toLowerCase();
+  box.innerHTML = list.map((h) => `<button type="button" class="chip ${cap.includes(h.tag) ? 'used' : ''}" data-hashtag="${esc(h.tag)}"
+      title="${esc(`${h.count}× · ${h.lift.toFixed(2)}×`)}">${esc(h.tag)} <span class="muted">${h.lift.toFixed(1)}×</span></button>`).join('');
+  $$('#tagSuggest [data-hashtag]').forEach((b) => b.addEventListener('click', () => {
+    const c = $('#caption');
+    if (c.value.toLowerCase().includes(b.dataset.hashtag)) return;
+    c.value = `${c.value.replace(/\s*$/, '')} ${b.dataset.hashtag}`.trimStart();
+    $('#capCount').textContent = c.value.length;
+    b.classList.add('used');
+  }));
+}
+
+function renderIdeaBanner() {
+  const el = $('#ideaBanner');
+  if (!state.ideaId) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  el.innerHTML = `<span>💡 ${esc(t('fromIdea', { t: state.ideaTitle || '' }))}</span><button class="btn tiny ghost" id="unlinkIdea">${esc(t('unlink'))}</button>`;
+  $('#unlinkIdea').addEventListener('click', () => { state.ideaId = null; renderIdeaBanner(); });
+}
+
+/** Called from the calendar / ideas pages to prefill the post form. */
+function prefillPost({ caption, tagIds, ideaId, ideaTitle, at } = {}) {
+  if (caption !== undefined) { $('#caption').value = caption; $('#capCount').textContent = caption.length; }
+  if (tagIds) state.postTagIds = [...tagIds];
+  state.ideaId = ideaId || null;
+  state.ideaTitle = ideaTitle || '';
+  if (at) $('#schedAt').value = toLocalInput(at);
+  go('scheduler');
+}
+
 // ---------------- settings ----------------
 async function renderSettings() {
   const s = state.settings = await call(api.getSettings);
@@ -401,6 +501,7 @@ async function renderSettings() {
   $('#scopeList').innerHTML = s.scopes.map((x) => `<span>${esc(x)}</span>`).join('');
   $('#setAutoSync').checked = s.autoSync;
   $('#setTray').checked = s.closeToTray;
+  $('#setGoal').value = s.postsPerWeek;
   const a = s.account;
   $('#accountBox').innerHTML = s.loggedIn && a
     ? `<img src="${esc(a.avatar_url)}" alt=""><div><b>${esc(a.display_name)}</b> <span class="muted">@${esc(a.username || '')}</span>
@@ -472,6 +573,13 @@ function bind() {
   });
   $('#setAutoSync').addEventListener('change', (e) => call(api.saveSettings, { autoSync: e.target.checked }));
   $('#setTray').addEventListener('change', (e) => call(api.saveSettings, { closeToTray: e.target.checked }));
+  $('#saveGoal').addEventListener('click', async () => { await call(api.saveSettings, { postsPerWeek: Number($('#setGoal').value) }); toast(t('saved')); });
+  $('#videoTagFilter').addEventListener('change', (e) => { state.videoTagFilter = e.target.value; renderVideoTable(); });
+  $('#manageTags').addEventListener('click', () => openTagManager());
+  $('#caption').addEventListener('input', () => {
+    const cap = $('#caption').value.toLowerCase();
+    $$('#tagSuggest [data-hashtag]').forEach((b) => b.classList.toggle('used', cap.includes(b.dataset.hashtag)));
+  });
   $('#copyRedir').addEventListener('click', () => { navigator.clipboard.writeText($('#redirUri').textContent); toast(t('copied')); });
   $('#btnLogin').addEventListener('click', async () => {
     $('#loginWait').classList.remove('hidden');

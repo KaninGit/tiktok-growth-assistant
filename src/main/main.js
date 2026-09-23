@@ -13,6 +13,7 @@ const { waitForAuthorization, redirectUri } = require('./oauth');
 const { syncAll } = require('./sync');
 const { Scheduler } = require('./scheduler');
 const A = require('./analytics');
+const G = require('./growth');
 
 const ICON = path.join(__dirname, '..', '..', 'build', 'icon.png');
 
@@ -22,6 +23,8 @@ let db = null;
 let client = null;
 let scheduler = null;
 let autoSyncTimer = null;
+let recentSyncTimer = null;
+let syncing = null;
 let quitting = false;
 
 // ---------- single instance ----------
@@ -118,7 +121,7 @@ function createTray() {
   tray.setToolTip('TikTok Growth Assistant');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open', click: showWindow },
-    { label: 'Sync now', click: () => runSync().catch(() => {}) },
+    { label: 'Sync now', click: () => runSync('full').catch(() => {}) },
     { type: 'separator' },
     { label: 'Quit', click: () => { quitting = true; app.quit(); } }
   ]));
@@ -126,24 +129,62 @@ function createTray() {
 }
 
 // ---------- sync ----------
-async function runSync() {
-  emit('sync:state', { running: true });
-  try {
-    const r = await syncAll(client, db);
-    emit('sync:state', { running: false, ok: true, at: r.at });
-    return r;
-  } catch (e) {
-    emit('sync:state', { running: false, ok: false, error: e.message });
-    throw e;
+function runSync(kind = 'full') {
+  if (syncing) return syncing; // never run two syncs at once
+  syncing = (async () => {
+    emit('sync:state', { running: true, kind });
+    try {
+      const r = await syncAll(client, db, { kind });
+      checkVelocityAlerts();
+      emit('sync:state', { running: false, ok: true, at: r.at, kind });
+      return r;
+    } catch (e) {
+      emit('sync:state', { running: false, ok: false, error: e.message, kind });
+      throw e;
+    } finally {
+      syncing = null;
+    }
+  })();
+  return syncing;
+}
+
+/** Fast sync is needed while any video (or a just-published post) is still in its first 48h. */
+function needsRecentSync() {
+  const openId = currentOpenId();
+  if (!openId) return false;
+  const since = Date.now() - cfg.RECENT_WINDOW_MS;
+  const v = db.get('SELECT 1 AS x FROM videos WHERE open_id = ? AND create_time * 1000 > ? LIMIT 1', [openId, since]);
+  const p = db.get(`SELECT 1 AS x FROM scheduled_posts WHERE status IN ('published','processing') AND updated_at > ? LIMIT 1`, [since]);
+  return !!(v || p);
+}
+
+function checkVelocityAlerts() {
+  const openId = currentOpenId();
+  if (!openId) return;
+  const { videos } = velocityData(openId);
+  for (const v of videos) {
+    if (v.level !== 'hot' || v.ageH > 48) continue;
+    const r = db.run('INSERT OR IGNORE INTO velocity_alerts(video_id, level, ratio, created_at) VALUES(?,?,?,?)',
+      [v.id, 'hot', v.ratio, Date.now()]);
+    if (r.changes) {
+      const lang = db.getSetting('lang', 'th');
+      notify(lang === 'en' ? `🔥 Trending ${v.ratio.toFixed(1)}× faster than usual` : `🔥 คลิปนี้วิ่งเร็วกว่าปกติ ${v.ratio.toFixed(1)} เท่า`,
+        `${v.title || v.id} — ${lang === 'en' ? 'reply to comments and plan a follow-up now' : 'ตอบคอมเมนต์และวางแผนภาคต่อตอนนี้เลย'}`);
+      emit('velocity:alert', { id: v.id });
+    }
   }
 }
 
 function setupAutoSync() {
   clearInterval(autoSyncTimer);
+  clearInterval(recentSyncTimer);
   if (db.getSetting('auto_sync', '1') !== '1') return;
   autoSyncTimer = setInterval(() => {
-    if (loadTokens()) runSync().catch(() => {});
+    if (loadTokens()) runSync('full').catch(() => {});
   }, cfg.AUTO_SYNC_INTERVAL_MS);
+  recentSyncTimer = setInterval(() => {
+    if (loadTokens() && needsRecentSync()) runSync('recent').catch(() => {});
+  }, cfg.RECENT_SYNC_INTERVAL_MS);
   const last = Number(db.getSetting('last_sync', 0));
   if (loadTokens() && Date.now() - last > cfg.AUTO_SYNC_INTERVAL_MS) setTimeout(() => runSync().catch(() => {}), 5000);
 }
@@ -154,6 +195,47 @@ function videosFor(openId) {
 }
 function snapshotsFor(openId) {
   return openId ? db.all('SELECT * FROM account_snapshots WHERE open_id = ? ORDER BY taken_at', [openId]) : [];
+}
+function videoTagRows(openId) {
+  return openId ? db.all(`SELECT vt.video_id, vt.tag_id FROM video_tags vt JOIN videos v ON v.id = vt.video_id
+                          WHERE v.open_id = ?`, [openId]) : [];
+}
+function allTags() {
+  return db.all('SELECT * FROM tags ORDER BY kind, name');
+}
+function velocityData(openId) {
+  const videos = videosFor(openId);
+  // only early-life snapshots matter for velocity & baseline
+  const snaps = db.all(`SELECT s.video_id, s.taken_at, s.view_count FROM video_snapshots s
+                        JOIN videos v ON v.id = s.video_id
+                        WHERE v.open_id = ? AND s.taken_at <= v.create_time * 1000 + ?`, [openId, 8 * 24 * 3600 * 1000]);
+  return G.velocity(videos, snaps);
+}
+function attributionData(openId) {
+  const since = Date.now() - cfg.ATTRIBUTION_WINDOW_MS;
+  const acc = db.all('SELECT taken_at, follower_count FROM account_snapshots WHERE open_id = ? AND taken_at > ? ORDER BY taken_at', [openId, since]);
+  const snaps = db.all(`SELECT s.video_id, s.taken_at, s.view_count FROM video_snapshots s JOIN videos v ON v.id = s.video_id
+                        WHERE v.open_id = ? AND s.taken_at > ?`, [openId, since]);
+  return G.attributeFollowers(acc, snaps, videosFor(openId));
+}
+function goalData(openId) {
+  const pending = db.all(`SELECT scheduled_at FROM scheduled_posts WHERE status = 'pending'`);
+  return G.postingGoal(videosFor(openId), pending, Number(db.getSetting('posts_per_week', cfg.DEFAULT_POSTS_PER_WEEK)));
+}
+const parseIds = (s) => { try { return (JSON.parse(s || '[]') || []).map(Number).filter(Boolean); } catch { return []; } };
+
+function onPostPublished(post) {
+  const tagIds = parseIds(post.tag_ids);
+  for (const vid of post.postIds || []) {
+    for (const tid of tagIds) db.run('INSERT OR IGNORE INTO video_tags(video_id, tag_id) VALUES(?, ?)', [vid, tid]);
+  }
+  if (post.idea_id) {
+    db.run(`UPDATE ideas SET status = ?, updated_at = ? WHERE id = ?`,
+      [post.status === 'inbox' ? 'scheduled' : 'done', Date.now(), post.idea_id]);
+  }
+  // the new video shows up in the video list shortly after publishing — start tracking it
+  setTimeout(() => runSync('recent').catch(() => {}), 2 * 60 * 1000);
+  setTimeout(() => runSync('recent').catch(() => {}), 15 * 60 * 1000);
 }
 
 // ---------- IPC ----------
@@ -179,6 +261,7 @@ function registerIpc() {
       lang: db.getSetting('lang', 'th'),
       autoSync: db.getSetting('auto_sync', '1') === '1',
       closeToTray: db.getSetting('close_to_tray', '1') === '1',
+      postsPerWeek: Number(db.getSetting('posts_per_week', cfg.DEFAULT_POSTS_PER_WEEK)),
       loggedIn: !!loadTokens(),
       account: acc ? JSON.parse(acc) : null,
       lastSync: Number(db.getSetting('last_sync', 0)) || null,
@@ -198,6 +281,11 @@ function registerIpc() {
     if (s.lang) db.setSetting('lang', s.lang === 'en' ? 'en' : 'th');
     if (s.autoSync !== undefined) { db.setSetting('auto_sync', s.autoSync ? '1' : '0'); setupAutoSync(); }
     if (s.closeToTray !== undefined) db.setSetting('close_to_tray', s.closeToTray ? '1' : '0');
+    if (s.postsPerWeek !== undefined) {
+      const n = Number(s.postsPerWeek);
+      if (!Number.isInteger(n) || n < 1 || n > 50) throw new Error('Posts per week must be 1–50');
+      db.setSetting('posts_per_week', n);
+    }
     return true;
   });
 
@@ -219,7 +307,7 @@ function registerIpc() {
     return true;
   });
 
-  handle('sync:run', () => runSync());
+  handle('sync:run', () => runSync('full'));
 
   handle('dashboard:get', () => {
     const openId = currentOpenId();
@@ -232,11 +320,113 @@ function registerIpc() {
       summary: A.summary(videos, growth),
       recent: videos.slice(0, 12).map((v) => ({ ...v, engagement: A.engagementRate(v) })),
       top: A.topVideos(videos, 5, 'view_count'),
+      goal: goalData(openId),
+      trending: openId ? velocityData(openId).videos.filter((v) => ['hot', 'up'].includes(v.level)).slice(0, 5) : [],
       lastSync: Number(db.getSetting('last_sync', 0)) || null
     };
   });
 
-  handle('videos:list', () => videosFor(currentOpenId()).map((v) => ({ ...v, engagement: A.engagementRate(v) })));
+  handle('videos:list', () => {
+    const openId = currentOpenId();
+    const vt = G.tagsByVideo(videoTagRows(openId));
+    return videosFor(openId).map((v) => ({ ...v, engagement: A.engagementRate(v), tag_ids: vt.get(v.id) || [] }));
+  });
+
+  handle('videos:setTags', (videoId, tagIds = []) => {
+    const id = String(videoId);
+    db.transaction(() => {
+      db.db.run('DELETE FROM video_tags WHERE video_id = ?', [id]);
+      for (const t of tagIds.map(Number).filter(Boolean)) db.db.run('INSERT OR IGNORE INTO video_tags(video_id, tag_id) VALUES(?, ?)', [id, t]);
+    });
+    return true;
+  });
+
+  // ----- tags -----
+  handle('tags:list', () => allTags());
+  handle('tags:save', (t = {}) => {
+    const name = String(t.name || '').trim().slice(0, 40);
+    const kind = t.kind === 'format' ? 'format' : 'pillar';
+    if (!name) throw new Error('Tag name is required');
+    const color = /^#[0-9a-f]{6}$/i.test(t.color || '') ? t.color : null;
+    const dup = db.get('SELECT id FROM tags WHERE name = ? AND kind = ? AND id != ?', [name, kind, Number(t.id) || 0]);
+    if (dup) throw new Error('A tag with this name already exists');
+    if (t.id) {
+      db.run('UPDATE tags SET name = ?, kind = ?, color = ? WHERE id = ?', [name, kind, color, Number(t.id)]);
+      return Number(t.id);
+    }
+    return db.run('INSERT INTO tags(name, kind, color) VALUES(?, ?, ?)', [name, kind, color]).lastId;
+  });
+  handle('tags:delete', (id) => {
+    db.transaction(() => {
+      db.db.run('DELETE FROM video_tags WHERE tag_id = ?', [Number(id)]);
+      db.db.run('DELETE FROM tags WHERE id = ?', [Number(id)]);
+    });
+    return true;
+  });
+
+  // ----- velocity -----
+  handle('velocity:get', () => {
+    const openId = currentOpenId();
+    if (!openId) return { baseline: null, videos: [] };
+    const r = velocityData(openId);
+    return {
+      ...r,
+      fastSync: db.getSetting('auto_sync', '1') === '1' && needsRecentSync(),
+      lastRecentSync: Number(db.getSetting('last_recent_sync', 0)) || null
+    };
+  });
+
+  // ----- ideas -----
+  handle('ideas:list', () => db.all(`SELECT * FROM ideas ORDER BY
+      CASE status WHEN 'idea' THEN 0 WHEN 'drafting' THEN 1 WHEN 'scheduled' THEN 2 WHEN 'done' THEN 3 ELSE 4 END,
+      priority, COALESCE(target_date, '9999'), updated_at DESC`).map((i) => ({ ...i, tag_ids: parseIds(i.tag_ids) })));
+  handle('ideas:save', (i = {}) => {
+    const title = String(i.title || '').trim().slice(0, 200);
+    if (!title) throw new Error('Idea title is required');
+    const statuses = ['idea', 'drafting', 'scheduled', 'done', 'archived'];
+    const vals = [
+      title, String(i.notes || '').slice(0, 5000), String(i.caption || '').slice(0, 2200),
+      JSON.stringify((i.tagIds || i.tag_ids || []).map(Number).filter(Boolean)),
+      [1, 2, 3].includes(Number(i.priority)) ? Number(i.priority) : 2,
+      statuses.includes(i.status) ? i.status : 'idea',
+      /^\d{4}-\d{2}-\d{2}$/.test(i.target_date || '') ? i.target_date : null,
+      Date.now()
+    ];
+    if (i.id) {
+      db.run(`UPDATE ideas SET title=?, notes=?, caption=?, tag_ids=?, priority=?, status=?, target_date=?, updated_at=? WHERE id=?`,
+        [...vals, Number(i.id)]);
+      return Number(i.id);
+    }
+    return db.run(`INSERT INTO ideas(title, notes, caption, tag_ids, priority, status, target_date, updated_at, created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?)`, [...vals, Date.now()]).lastId;
+  });
+  handle('ideas:delete', (id) => { db.run('DELETE FROM ideas WHERE id = ?', [Number(id)]); return true; });
+
+  // ----- calendar & goals -----
+  handle('calendar:get', (year, month) => {
+    const openId = currentOpenId();
+    const from = new Date(Number(year), Number(month), 1);
+    from.setDate(from.getDate() - 7);
+    const to = new Date(Number(year), Number(month) + 1, 1);
+    to.setDate(to.getDate() + 7);
+    const f = from.getTime(); const t = to.getTime();
+    const pad = (n) => String(n).padStart(2, '0');
+    const ds = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    return {
+      videos: openId ? db.all(`SELECT id, title, create_time, view_count, like_count, cover_image_url, share_url FROM videos
+                               WHERE open_id = ? AND create_time * 1000 >= ? AND create_time * 1000 < ?`, [openId, f, t]) : [],
+      posts: db.all(`SELECT id, title, file_path, scheduled_at, status, mode FROM scheduled_posts
+                     WHERE scheduled_at >= ? AND scheduled_at < ? AND status NOT IN ('cancelled')`, [f, t]),
+      ideas: db.all(`SELECT id, title, target_date, status, priority FROM ideas
+                     WHERE target_date >= ? AND target_date < ? AND status NOT IN ('done','archived')`, [ds(from), ds(to)]),
+      goal: goalData(openId)
+    };
+  });
+
+  handle('hashtags:suggest', (tagId) => {
+    const openId = currentOpenId();
+    return G.suggestHashtags(videosFor(openId), videoTagRows(openId), { tagId: Number(tagId) || null });
+  });
 
   handle('videos:history', (videoId) =>
     db.all('SELECT * FROM video_snapshots WHERE video_id = ? ORDER BY taken_at', [String(videoId)]));
@@ -249,7 +439,23 @@ function registerIpc() {
       hashtags: A.hashtagStats(videos).slice(0, 30),
       duration: A.durationStats(videos),
       topEngagement: A.topVideos(videos.filter((v) => v.view_count >= 100), 10, 'engagement'),
-      sampleSize: videos.length
+      sampleSize: videos.length,
+      ...(() => {
+        const openId = currentOpenId();
+        if (!openId) return { attribution: null, tagPerf: null };
+        const att = attributionData(openId);
+        const byId = new Map(videos.map((v) => [v.id, v]));
+        return {
+          attribution: {
+            ...att,
+            rows: att.rows.slice(0, 15).map((r) => {
+              const v = byId.get(r.video_id) || {};
+              return { ...r, title: v.title, cover_image_url: v.cover_image_url, share_url: v.share_url, view_count: v.view_count };
+            })
+          },
+          tagPerf: G.tagPerformance(videos, videoTagRows(openId), allTags(), att)
+        };
+      })()
     };
   });
 
@@ -270,12 +476,14 @@ function registerIpc() {
     const now = Date.now();
     const r = db.run(`INSERT INTO scheduled_posts(open_id, file_path, file_size, duration_sec, title, mode, privacy_level,
         disable_comment, disable_duet, disable_stitch, brand_content_toggle, brand_organic_toggle,
-        scheduled_at, status, created_at, updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending', ?, ?)`,
+        scheduled_at, status, created_at, updated_at, idea_id, tag_ids)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending', ?, ?, ?, ?)`,
     [currentOpenId(), p.filePath, fs.statSync(p.filePath).size, Number(p.durationSec) || null, title, mode,
       mode === 'direct' ? p.privacyLevel : null,
       p.disableComment ? 1 : 0, p.disableDuet ? 1 : 0, p.disableStitch ? 1 : 0,
-      p.brandContent ? 1 : 0, p.brandOrganic ? 1 : 0, at, now, now]);
+      p.brandContent ? 1 : 0, p.brandOrganic ? 1 : 0, at, now, now,
+      Number(p.ideaId) || null, JSON.stringify((p.tagIds || []).map(Number).filter(Boolean))]);
+    if (p.ideaId) db.run(`UPDATE ideas SET status = 'scheduled', updated_at = ? WHERE id = ?`, [now, Number(p.ideaId)]);
     emit('posts:updated');
     setTimeout(() => scheduler.tick(), 500);
     return r.lastId;
@@ -356,7 +564,7 @@ app.whenReady().then(async () => {
   app.setAppUserModelId('com.barrelofexcellence.tiktokgrowth');
   db = await new Database(path.join(app.getPath('userData'), 'tga.sqlite')).open();
   client = new TikTokClient({ getCredentials, loadTokens, saveTokens });
-  scheduler = new Scheduler({ db, client, onChange: () => emit('posts:updated'), notify });
+  scheduler = new Scheduler({ db, client, onChange: () => emit('posts:updated'), notify, onPublished: onPostPublished });
 
   registerIpc();
   createWindow();

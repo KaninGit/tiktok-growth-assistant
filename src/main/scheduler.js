@@ -10,11 +10,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * (the app keeps running in the system tray when the window is closed).
  */
 class Scheduler {
-  constructor({ db, client, onChange = () => {}, notify = () => {} }) {
+  constructor({ db, client, onChange = () => {}, notify = () => {}, onPublished = () => {} }) {
     this.db = db;
     this.client = client;
     this.onChange = onChange;
     this.notify = notify;
+    this.onPublished = onPublished;
     this.timer = null;
     this.busy = false;
   }
@@ -97,7 +98,10 @@ class Scheduler {
         return;
       }
       const status = final.status === 'SEND_TO_USER_INBOX' ? 'inbox' : 'published';
-      this.update(post.id, { status });
+      // TikTok returns the public post id(s) (field name is spelled this way in the API).
+      const postIds = (final.publicaly_available_post_id || final.publicly_available_post_id || []).map(String);
+      this.update(post.id, { status, post_ids: postIds.length ? JSON.stringify(postIds) : null });
+      try { this.onPublished({ ...post, status, postIds }); } catch (e) { console.error('onPublished failed', e); }
       this.notify(status === 'inbox' ? 'Sent to TikTok inbox' : 'Video posted', post.title || post.file_path);
     } catch (e) {
       this.update(post.id, { status: 'failed', error: `${e.message}${e.logId ? ` (log_id ${e.logId})` : ''}` });

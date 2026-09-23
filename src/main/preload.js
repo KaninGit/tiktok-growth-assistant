@@ -23,9 +23,19 @@ contextBridge.exposeInMainWorld('api', {
   pickVideo: call('dialog:pickVideo'),
   exportCsv: call('export:csv'),
   openUrl: call('shell:open'),
+  setVideoTags: call('videos:setTags'),
+  tags: call('tags:list'),
+  saveTag: call('tags:save'),
+  deleteTag: call('tags:delete'),
+  velocity: call('velocity:get'),
+  ideas: call('ideas:list'),
+  saveIdea: call('ideas:save'),
+  deleteIdea: call('ideas:delete'),
+  calendar: call('calendar:get'),
+  suggestHashtags: call('hashtags:suggest'),
   pathForFile: (file) => webUtils.getPathForFile(file),
   on: (channel, fn) => {
-    const allowed = ['posts:updated', 'sync:state'];
+    const allowed = ['posts:updated', 'sync:state', 'velocity:alert'];
     if (!allowed.includes(channel)) return () => {};
     const h = (_e, payload) => fn(payload);
     ipcRenderer.on(channel, h);

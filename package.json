@@ -1,14 +1,14 @@
 {
   "name": "tiktok-growth-assistant",
   "productName": "TikTok Growth Assistant",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Analytics, best-time-to-post and scheduled posting for your own TikTok account via the official TikTok API",
   "main": "src/main/main.js",
   "author": "Barrel Of Excellence",
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "test": "node test/smoke.test.js",
+    "test": "node test/smoke.test.js && node test/growth.test.js",
     "dist": "electron-builder --win nsis portable --x64",
     "dist:portable": "electron-builder --win portable --x64"
   },

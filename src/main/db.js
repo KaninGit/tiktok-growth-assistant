@@ -67,7 +67,49 @@ CREATE TABLE IF NOT EXISTS scheduled_posts (
   updated_at           INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_posts_due ON scheduled_posts(status, scheduled_at);
+CREATE TABLE IF NOT EXISTS sync_runs (
+  taken_at INTEGER PRIMARY KEY,
+  kind     TEXT NOT NULL            -- full | recent
+);
+CREATE TABLE IF NOT EXISTS tags (
+  id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  name  TEXT NOT NULL,
+  kind  TEXT NOT NULL DEFAULT 'pillar',  -- pillar | format
+  color TEXT,
+  UNIQUE(name, kind)
+);
+CREATE TABLE IF NOT EXISTS video_tags (
+  video_id TEXT NOT NULL,
+  tag_id   INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (video_id, tag_id)
+);
+CREATE TABLE IF NOT EXISTS ideas (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  title       TEXT NOT NULL,
+  notes       TEXT,
+  caption     TEXT,
+  tag_ids     TEXT,                  -- JSON array of tag ids
+  priority    INTEGER DEFAULT 2,     -- 1 high, 2 normal, 3 low
+  status      TEXT DEFAULT 'idea',   -- idea | drafting | scheduled | done | archived
+  target_date TEXT,                  -- YYYY-MM-DD
+  created_at  INTEGER,
+  updated_at  INTEGER
+);
+CREATE TABLE IF NOT EXISTS velocity_alerts (
+  video_id   TEXT NOT NULL,
+  level      TEXT NOT NULL,
+  ratio      REAL,
+  created_at INTEGER,
+  PRIMARY KEY (video_id, level)
+);
 `;
+
+// Columns added after v0.1 — applied with ALTER TABLE if missing.
+const MIGRATIONS = [
+  ['scheduled_posts', 'idea_id', 'INTEGER'],
+  ['scheduled_posts', 'tag_ids', 'TEXT'],
+  ['scheduled_posts', 'post_ids', 'TEXT']
+];
 
 class Database {
   constructor(filePath) {
@@ -86,6 +128,10 @@ class Database {
     }
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.db.exec(SCHEMA);
+    for (const [table, col, type] of MIGRATIONS) {
+      const cols = this.all(`PRAGMA table_info(${table})`).map((c) => c.name);
+      if (!cols.includes(col)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+    }
     this.flush();
     return this;
   }
